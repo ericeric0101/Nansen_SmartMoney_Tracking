@@ -1,0 +1,56 @@
+Metadata-Version: 2.4
+Name: nansen-sm-collector
+Version: 0.1.0
+Summary: Modular pipeline for Nansen Smart Money signal collection
+Author: Smart Money Team
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: alembic>=1.13
+Requires-Dist: httpx>=0.25
+Requires-Dist: pydantic>=2.5
+Requires-Dist: pydantic-settings>=2.1
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: structlog>=23.1
+Requires-Dist: tenacity>=8.2
+Requires-Dist: typer>=0.9
+Requires-Dist: rich>=13.7
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21; extra == "dev"
+Requires-Dist: pytest-cov>=4.1; extra == "dev"
+Requires-Dist: responses>=0.23; extra == "dev"
+Requires-Dist: freezegun>=1.4; extra == "dev"
+Requires-Dist: mypy>=1.7; extra == "dev"
+Requires-Dist: ruff>=0.1.6; extra == "dev"
+
+# Nansen Smart Money Collector
+
+此專案依據 `docs/Nansen_SmartMoney_Collector_FullPlan.md` 的 Phase‑1 規劃打造，用於蒐集與評分 Nansen 提供的 Smart Money 資料。專案採模組化結構，便於後續擴充 Phase‑2 交易引擎與 Phase‑3 外部資料來源，同時透過 STOP_GATE 控制流程，確保每個階段完成驗證後才繼續前進。
+
+## 核心特色
+- `src/nansen_sm_collector` 封裝組態、資料模型、資料庫、資料擷取與評分邏輯。
+- CLI 入口 (`python -m nansen_sm_collector`) 會依階段參數執行對應流程並產出報告。
+- 預設使用 SQLite，亦可透過環境變數切換其他資料庫。
+- 測試骨架已配置 `tests/unit` 與 `tests/integration`，便於之後撰寫詳細測試案例。
+
+## 快速開始
+1. 建立虛擬環境並安裝依賴：
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -e .
+   ```
+2. 複製 `.env.example` 至 `.env` 並填入 `NANSEN_API_KEY`。
+3. 執行 CLI：
+   ```bash
+   python -m nansen_sm_collector run-once --use-mock true
+   ```
+
+## 後續工作
+- 依規劃補齊各模組實作邏輯與單元／整合測試。
+- 實作資料庫遷移流程並補足資料集樣本。
+- 建立 Phase STOP_GATE 驗證邏輯與報告輸出。
+
+更多細節請參考 `docs/Nansen_SmartMoney_Collector_FullPlan.md`。
