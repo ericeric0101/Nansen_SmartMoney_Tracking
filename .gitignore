@@ -12,4 +12,5 @@ __pycache__/
 dist/
 build/
 reports/history/
-.ok
+phase1.ok
+phase2.ok
