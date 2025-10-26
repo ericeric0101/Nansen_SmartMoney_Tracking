@@ -23,8 +23,11 @@ from ..data.repos import (
     SignalRepository,
     SimulatedTradeRepository,
     TokenRepository,
+    TokenScreenerRepository,
     WalletRepository,
 )
+from ..services.token_market_data import TokenMarketDataService
+from ..services.token_overview import TokenOverviewService
 from ..services.trade_simulator import TradeSimulator
 from ..services.wallet_alpha import WalletAlphaService
 from .enrich import EventEnricher
@@ -59,7 +62,11 @@ class CollectorPipeline:
 
         client = self._build_client(use_mock)
         gecko_client: GeckoTerminalClient | None = None
-        if self._settings.trade_simulation_enabled and not use_mock:
+        need_gecko = (
+            self._settings.trade_simulation_enabled
+            or self._settings.gecko_terminal_market_data_enabled
+        )
+        if need_gecko and not use_mock:
             gecko_client = GeckoTerminalClient(
                 base_url=self._settings.gecko_terminal_base_url,
                 version=self._settings.gecko_terminal_version,
@@ -78,6 +85,7 @@ class CollectorPipeline:
             signal_repo = SignalRepository(session)
             run_repo = RunHistoryRepository(session)
             filters = EventFilterSet(self._settings, event_repo)
+            screener_repo = TokenScreenerRepository(session)
             trade_simulator: TradeSimulator | None = None
             if gecko_client and self._settings.trade_simulation_enabled:
                 trade_repo = SimulatedTradeRepository(session)
@@ -92,7 +100,7 @@ class CollectorPipeline:
             buy_count = 0
             sell_count = 0
 
-            events, source_stats = self._fetch_and_normalize(client, normalizer)
+            events, source_stats, screener_rows = self._fetch_and_normalize(client, normalizer)
             stats.update(source_stats)
             enricher = EventEnricher(
                 client=client,
@@ -103,6 +111,30 @@ class CollectorPipeline:
             stats["enriched_events"] = len(enriched_events)
             merged_events = self._merge_events(enriched_events)
             stats["merged_events"] = len(merged_events)
+            raw_events_path: Path | None = None
+            if self._settings.dump_phase1_raw_events:
+                raw_events_path = self._dump_raw_events(merged_events)
+                stats["raw_events_path"] = str(raw_events_path)
+            stats["token_screener_snapshots"] = len(screener_rows)
+            overview_service = TokenOverviewService()
+            token_overview = overview_service.build_overview(merged_events, screener_rows)
+            if (
+                gecko_client
+                and self._settings.gecko_terminal_market_data_enabled
+                and token_overview
+            ):
+                market_data_service = TokenMarketDataService(
+                    gecko_client,
+                    timeframe=self._settings.gecko_terminal_ohlcv_timeframe,
+                    limit=self._settings.gecko_terminal_ohlcv_limit,
+                    min_trade_usd=self._settings.gecko_terminal_trade_min_usd,
+                    pool_map=self._settings.gecko_terminal_token_pools_map,
+                )
+                token_overview = market_data_service.enrich(token_overview)
+            stats["token_overview_count"] = len(token_overview)
+            stats["market_data_pools"] = sum(
+                len((entry.get("market") or {}).get("pools") or []) for entry in token_overview
+            )
             filtered_events, filter_stats = filters.apply(merged_events)
             stats["filter_stats"] = filter_stats
             signals: List[Signal] = []
@@ -132,9 +164,14 @@ class CollectorPipeline:
 
             run_time = utc_now()
             run_time_local = run_time.astimezone(timezone)
-            report_path, history_entries = self._write_report(signals, run_time, run_time_local)
+            report_path, history_entries = self._write_report(
+                signals,
+                run_time,
+                run_time_local,
+                token_overview=token_overview,
+            )
             run_id = str(uuid4())
-            run_repo.create_run(
+            run_model = run_repo.create_run(
                 run_id=run_id,
                 executed_at=run_time,
                 executed_at_local=run_time_local,
@@ -143,7 +180,11 @@ class CollectorPipeline:
                 sell_signals=sell_count,
                 stats=stats,
             )
+            screener_repo.bulk_insert_snapshots(run_model.id, screener_rows, captured_at=run_time)
+            screener_repo.upsert_market_metrics(screener_rows, captured_at=run_time)
             run_repo.bulk_insert_summaries(run_id, history_entries or [])
+            overview_path = self._write_token_overview(token_overview, run_time)
+            stats["token_overview_path"] = str(overview_path) if overview_path else None
 
         if isinstance(client, NansenAPIClient):
             client.close()
@@ -170,7 +211,7 @@ class CollectorPipeline:
         self,
         client: NansenAPIClient | MockNansenClient,
         normalizer: EventNormalizer,
-    ) -> tuple[List[Event], dict[str, int]]:
+    ) -> tuple[List[Event], dict[str, int], List[dict]]:
         stats: dict[str, int] = {}
 
         dex_events = self._fetch_dex_events(client, normalizer)
@@ -179,6 +220,11 @@ class CollectorPipeline:
         screener_payload = client.fetch_token_screener(self._build_token_screener_payload())
         screener_events = normalizer.token_screener(screener_payload)
         stats["token_screener_events"] = len(screener_events)
+        screener_rows: List[dict] = []
+        if isinstance(screener_payload, dict):
+            data = screener_payload.get("data")
+            if isinstance(data, list):
+                screener_rows = [row for row in data if isinstance(row, dict)]
 
         netflow_payload = client.fetch_netflows(self._build_netflow_payload())
         netflow_events = normalizer.netflows(netflow_payload)
@@ -189,7 +235,7 @@ class CollectorPipeline:
         events.extend(screener_events)
         events.extend(netflow_events)
         stats["total_events"] = len(events)
-        return events, stats
+        return events, stats, screener_rows
 
     def _fetch_dex_events(
         self,
@@ -355,6 +401,7 @@ class CollectorPipeline:
         signals: Sequence[Signal],
         run_time: datetime,
         run_time_local: datetime,
+        token_overview: Sequence[dict] | None = None,
     ) -> tuple[Path, List[dict]]:
         report_dir = Path("reports")
         report_dir.mkdir(exist_ok=True)
@@ -438,6 +485,31 @@ class CollectorPipeline:
             if sell_groups:
                 _render("建議賣出", sell_groups)
 
+        if token_overview:
+            lines.append("## 市場熱度對照")
+            lines.append("")
+            for entry in token_overview:
+                market = entry.get("market", {})
+                smart = entry.get("smart_money", {})
+                lines.append(
+                    f"- {entry.get('token_symbol')} ({entry.get('token_address')}) [chain: {entry.get('chain')}] "
+                    f"volume={market.get('volume')} netflow={market.get('netflow')} price_change={market.get('price_change')}"
+                )
+                if smart:
+                    lines.append(
+                        f"  Smart money trades={smart.get('event_count')} "
+                        f"total_usd={smart.get('total_usd_notional')} netflow={smart.get('netflow_summary')}"
+                    )
+                pools = market.get("pools") or []
+                if pools:
+                    first_pool = pools[0]
+                    trade_stats = first_pool.get("trade_stats") or {}
+                    lines.append(
+                        f"  Pool {first_pool.get('pool_address')} trades={trade_stats.get('trade_count', 0)} "
+                        f"volume_usd={trade_stats.get('total_volume_usd')} max_trade={trade_stats.get('max_trade_volume_usd')}"
+                    )
+            lines.append("")
+
         markdown_content = "\n".join(lines)
         report_path.write_text(markdown_content, encoding="utf-8")
 
@@ -446,10 +518,31 @@ class CollectorPipeline:
         history_filename = run_time.strftime("phase1_%Y%m%dT%H%M%SZ")
         (history_dir / f"{history_filename}.md").write_text(markdown_content, encoding="utf-8")
 
-        import json
-
         (history_dir / f"{history_filename}.json").write_text(
             json.dumps(history_entries, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         return report_path, history_entries
+
+    def _write_token_overview(self, overview: Sequence[dict], run_time: datetime) -> Path | None:
+        if not overview:
+            return None
+        report_dir = Path("reports")
+        report_dir.mkdir(exist_ok=True)
+        path = report_dir / "token_overview_latest.json"
+        payload = {
+            "generated_at": run_time.isoformat(),
+            "data": overview,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def _dump_raw_events(self, events: Sequence[Event]) -> Path:
+        """將合併後的事件寫入 JSON，方便除錯檢視。"""
+
+        report_dir = Path("reports")
+        report_dir.mkdir(exist_ok=True)
+        target_path = report_dir / "phase1_raw_events.json"
+        data = [event.model_dump(mode="json") for event in events]
+        target_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return target_path

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -162,6 +162,68 @@ class RunHistoryModel(Base):
     summaries: Mapped[list["SignalSummaryModel"]] = relationship(
         back_populates="run",
         cascade="all, delete-orphan",
+    )
+    screener_snapshots: Mapped[list["TokenScreenerSnapshotModel"]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class TokenScreenerSnapshotModel(Base):
+    """保存 Token Screener 單次快照紀錄。"""
+
+    __tablename__ = "token_screener_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("run_history.id"), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    chain: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_address: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_age_days: Mapped[float | None] = mapped_column(Float)
+    market_cap_usd: Mapped[float | None] = mapped_column(Float)
+    liquidity: Mapped[float | None] = mapped_column(Float)
+    price_usd: Mapped[float | None] = mapped_column(Float)
+    price_change: Mapped[float | None] = mapped_column(Float)
+    fdv: Mapped[float | None] = mapped_column(Float)
+    fdv_mc_ratio: Mapped[float | None] = mapped_column(Float)
+    buy_volume: Mapped[float | None] = mapped_column(Float)
+    sell_volume: Mapped[float | None] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    netflow: Mapped[float | None] = mapped_column(Float)
+    inflow_fdv_ratio: Mapped[float | None] = mapped_column(Float)
+    outflow_fdv_ratio: Mapped[float | None] = mapped_column(Float)
+
+    run: Mapped["RunHistoryModel"] = relationship(back_populates="screener_snapshots")
+
+
+class TokenMarketMetricModel(Base):
+    """彙總每個 Token 最新市場指標。"""
+
+    __tablename__ = "token_market_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chain: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_address: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    snapshot_captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    market_cap_usd: Mapped[float | None] = mapped_column(Float)
+    liquidity: Mapped[float | None] = mapped_column(Float)
+    price_usd: Mapped[float | None] = mapped_column(Float)
+    price_change: Mapped[float | None] = mapped_column(Float)
+    fdv: Mapped[float | None] = mapped_column(Float)
+    fdv_mc_ratio: Mapped[float | None] = mapped_column(Float)
+    buy_volume: Mapped[float | None] = mapped_column(Float)
+    sell_volume: Mapped[float | None] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    netflow: Mapped[float | None] = mapped_column(Float)
+    inflow_fdv_ratio: Mapped[float | None] = mapped_column(Float)
+    outflow_fdv_ratio: Mapped[float | None] = mapped_column(Float)
+    token_age_days: Mapped[float | None] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("chain", "token_address", name="uq_token_market_metrics_token"),
     )
 
 

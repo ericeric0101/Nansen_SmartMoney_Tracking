@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable
+from typing import Any, Dict, Iterable, List
 
 import httpx
 
@@ -82,3 +82,57 @@ class GeckoTerminalClient:
         if normalized in cls.NETWORK_MAP:
             return cls.NETWORK_MAP[normalized]
         return normalized
+
+    def get_pool_ohlcv(
+        self,
+        chain: str,
+        pool_address: str,
+        *,
+        timeframe: str = "hour",
+        limit: int = 24,
+    ) -> List[dict]:
+        network = self._resolve_network(chain)
+        if not network:
+            raise AdapterError(f"不支援的 GeckoTerminal 網路: {chain}")
+        address = pool_address.lower()
+        url = f"/networks/{network}/pools/{address}/ohlcv/{timeframe}"
+        try:
+            response = self._client.get(url, params={"limit": limit})
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response is not None and error.response.status_code == 404:
+                return []
+            raise AdapterError(f"GeckoTerminal OHLCV 取得失敗: {error}") from error
+        payload = response.json()
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        return []
+
+    def get_pool_trades(
+        self,
+        chain: str,
+        pool_address: str,
+        *,
+        min_volume_usd: float = 0.0,
+    ) -> List[dict]:
+        network = self._resolve_network(chain)
+        if not network:
+            raise AdapterError(f"不支援的 GeckoTerminal 網路: {chain}")
+        address = pool_address.lower()
+        url = f"/networks/{network}/pools/{address}/trades"
+        params: Dict[str, Any] = {}
+        if min_volume_usd > 0:
+            params["trade_volume_in_usd_greater_than"] = min_volume_usd
+        try:
+            response = self._client.get(url, params=params or None)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response is not None and error.response.status_code == 404:
+                return []
+            raise AdapterError(f"GeckoTerminal Trades 取得失敗: {error}") from error
+        payload = response.json()
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        return []

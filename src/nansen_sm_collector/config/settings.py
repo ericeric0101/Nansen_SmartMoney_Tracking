@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, List, Optional
@@ -42,10 +43,16 @@ class AppSettings(BaseSettings):
     trade_simulation_gain: float = Field(0.3, alias="TRADE_SIMULATION_GAIN")
     gecko_terminal_base_url: str = Field("https://api.geckoterminal.com/api/v2", alias="GECKO_TERMINAL_BASE_URL")
     gecko_terminal_version: str = Field("20230203", alias="GECKO_TERMINAL_VERSION")
+    gecko_terminal_market_data_enabled: bool = Field(False, alias="GECKO_TERMINAL_MARKET_DATA_ENABLED")
+    gecko_terminal_ohlcv_timeframe: str = Field("hour", alias="GECKO_TERMINAL_OHLCV_TIMEFRAME")
+    gecko_terminal_ohlcv_limit: int = Field(24, alias="GECKO_TERMINAL_OHLCV_LIMIT")
+    gecko_terminal_trade_min_usd: float = Field(0.0, alias="GECKO_TERMINAL_TRADE_MIN_USD")
+    gecko_terminal_token_pools: str = Field("{}", alias="GECKO_TERMINAL_TOKEN_POOLS")
     volume_z_th_1h: float = Field(1.645, alias="VOLUME_Z_TH_1H")
     liquidity_min_score: float = Field(0.5, alias="LIQUIDITY_MIN_SCORE")
     thresh_signal: float = Field(0.65, alias="THRESH_SIGNAL")
     cooldown_min: int = Field(30, alias="COOLDOWN_MIN")
+    dump_phase1_raw_events: bool = Field(False, alias="DUMP_PHASE1_RAW_EVENTS")
 
     weight_usd: float = Field(0.25, alias="W_USD")
     weight_label: float = Field(0.25, alias="W_LABEL")
@@ -76,6 +83,31 @@ class AppSettings(BaseSettings):
     @property
     def dex_exclude_labels(self) -> List[str]:
         return [item.strip() for item in self.nansen_dex_exclude_labels.split(",") if item.strip()]
+
+    @property
+    def gecko_terminal_token_pools_map(self) -> dict[str, dict[str, list[str]]]:
+        try:
+            raw = json.loads(self.gecko_terminal_token_pools)
+        except json.JSONDecodeError:
+            return {}
+        result: dict[str, dict[str, list[str]]] = {}
+        if not isinstance(raw, dict):
+            return result
+        for chain, tokens in raw.items():
+            if not isinstance(tokens, dict):
+                continue
+            normalized_chain = str(chain).lower()
+            result.setdefault(normalized_chain, {})
+            for token_address, pools in tokens.items():
+                addr = str(token_address).lower()
+                if isinstance(pools, list):
+                    pool_list = [str(pool).lower() for pool in pools if pool]
+                elif isinstance(pools, str):
+                    pool_list = [pools.lower()]
+                else:
+                    continue
+                result[normalized_chain][addr] = pool_list
+        return result
 
     @field_validator("nansen_dex_trade_max_usd", mode="before")
     @classmethod

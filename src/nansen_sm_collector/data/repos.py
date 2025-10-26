@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence
 
 from sqlalchemy.orm import Session
 
@@ -339,4 +339,81 @@ class RunHistoryRepository(BaseRepository):
                 if isinstance(entry.get("generated_at_local"), str)
                 else utc_now(),
             )
+            self.session.add(model)
+
+
+class TokenScreenerRepository(BaseRepository):
+    """儲存 Token Screener 快照與最新指標。"""
+
+    def bulk_insert_snapshots(
+        self,
+        run_id: int,
+        snapshots: Sequence[dict],
+        captured_at: datetime,
+    ) -> None:
+        if not snapshots:
+            return
+        models = []
+        for entry in snapshots:
+            model = schemas.TokenScreenerSnapshotModel(
+                run_id=run_id,
+                captured_at=captured_at,
+                chain=entry.get("chain", ""),
+                token_address=(entry.get("token_address") or "").lower(),
+                token_symbol=entry.get("token_symbol") or "",
+                token_age_days=entry.get("token_age_days"),
+                market_cap_usd=entry.get("market_cap_usd"),
+                liquidity=entry.get("liquidity"),
+                price_usd=entry.get("price_usd"),
+                price_change=entry.get("price_change"),
+                fdv=entry.get("fdv"),
+                fdv_mc_ratio=entry.get("fdv_mc_ratio"),
+                buy_volume=entry.get("buy_volume"),
+                sell_volume=entry.get("sell_volume"),
+                volume=entry.get("volume"),
+                netflow=entry.get("netflow"),
+                inflow_fdv_ratio=entry.get("inflow_fdv_ratio"),
+                outflow_fdv_ratio=entry.get("outflow_fdv_ratio"),
+            )
+            models.append(model)
+        self.session.bulk_save_objects(models)
+
+    def upsert_market_metrics(
+        self,
+        snapshots: Sequence[dict],
+        captured_at: datetime,
+    ) -> None:
+        for entry in snapshots:
+            chain = entry.get("chain", "")
+            token_address = (entry.get("token_address") or "").lower()
+            token_symbol = entry.get("token_symbol") or ""
+            model = (
+                self.session.query(schemas.TokenMarketMetricModel)
+                .filter(schemas.TokenMarketMetricModel.chain == chain)
+                .filter(schemas.TokenMarketMetricModel.token_address == token_address)
+                .one_or_none()
+            )
+            if model is None:
+                model = schemas.TokenMarketMetricModel(
+                    chain=chain,
+                    token_address=token_address,
+                    token_symbol=token_symbol,
+                    snapshot_captured_at=captured_at,
+                )
+            model.token_symbol = token_symbol or model.token_symbol
+            model.snapshot_captured_at = captured_at
+            model.market_cap_usd = entry.get("market_cap_usd")
+            model.liquidity = entry.get("liquidity")
+            model.price_usd = entry.get("price_usd")
+            model.price_change = entry.get("price_change")
+            model.fdv = entry.get("fdv")
+            model.fdv_mc_ratio = entry.get("fdv_mc_ratio")
+            model.buy_volume = entry.get("buy_volume")
+            model.sell_volume = entry.get("sell_volume")
+            model.volume = entry.get("volume")
+            model.netflow = entry.get("netflow")
+            model.inflow_fdv_ratio = entry.get("inflow_fdv_ratio")
+            model.outflow_fdv_ratio = entry.get("outflow_fdv_ratio")
+            model.token_age_days = entry.get("token_age_days")
+            model.updated_at = utc_now()
             self.session.add(model)
