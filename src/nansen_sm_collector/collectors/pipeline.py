@@ -28,6 +28,7 @@ from ..data.repos import (
 )
 from ..services.token_market_data import TokenMarketDataService
 from ..services.token_overview import TokenOverviewService
+from ..services.trade_signal_builder import TradeSignalBuilder
 from ..services.trade_simulator import TradeSimulator
 from ..services.wallet_alpha import WalletAlphaService
 from .enrich import EventEnricher
@@ -44,6 +45,7 @@ class PipelineResult:
     report_path: Path | None = None
     stats: dict[str, object] | None = None
     history_entries: List[dict] | None = None
+    trade_candidates: dict | None = None
 
 
 class CollectorPipeline:
@@ -74,9 +76,11 @@ class CollectorPipeline:
         wallet_alpha = WalletAlphaService(session_factory=self._session_factory)
         normalizer = EventNormalizer()
         scorer = SignalScorer(self._settings)
+        trade_signal_builder = TradeSignalBuilder()
         timezone = ZoneInfo(self._settings.timezone)
         report_path: Path | None = None
         history_entries: List[dict] = []
+        trade_candidates: dict | None = None
 
         with db.session_scope(self._session_factory) as session:
             token_repo = TokenRepository(session)
@@ -135,6 +139,9 @@ class CollectorPipeline:
             stats["market_data_pools"] = sum(
                 len((entry.get("market") or {}).get("pools") or []) for entry in token_overview
             )
+            trade_candidates = trade_signal_builder.build(token_overview)
+            stats["trade_candidates_with_smart"] = len(trade_candidates.get("with_smart_money", []))
+            stats["trade_candidates_without_smart"] = len(trade_candidates.get("without_smart_money", []))
             filtered_events, filter_stats = filters.apply(merged_events)
             stats["filter_stats"] = filter_stats
             signals: List[Signal] = []
@@ -169,6 +176,7 @@ class CollectorPipeline:
                 run_time,
                 run_time_local,
                 token_overview=token_overview,
+                trade_candidates=trade_candidates,
             )
             run_id = str(uuid4())
             run_model = run_repo.create_run(
@@ -185,6 +193,8 @@ class CollectorPipeline:
             run_repo.bulk_insert_summaries(run_id, history_entries or [])
             overview_path = self._write_token_overview(token_overview, run_time)
             stats["token_overview_path"] = str(overview_path) if overview_path else None
+            trade_candidates_path = self._write_trade_candidates(trade_candidates, run_time)
+            stats["trade_candidates_path"] = str(trade_candidates_path) if trade_candidates_path else None
 
         if isinstance(client, NansenAPIClient):
             client.close()
@@ -197,6 +207,7 @@ class CollectorPipeline:
             report_path=report_path,
             stats=stats,
             history_entries=history_entries,
+            trade_candidates=trade_candidates,
         )
 
     def _build_client(self, use_mock: bool):
@@ -402,6 +413,7 @@ class CollectorPipeline:
         run_time: datetime,
         run_time_local: datetime,
         token_overview: Sequence[dict] | None = None,
+        trade_candidates: dict | None = None,
     ) -> tuple[Path, List[dict]]:
         report_dir = Path("reports")
         report_dir.mkdir(exist_ok=True)
@@ -510,6 +522,31 @@ class CollectorPipeline:
                     )
             lines.append("")
 
+        if trade_candidates:
+            top_with = trade_candidates.get("with_smart_money") or []
+            top_without = trade_candidates.get("without_smart_money") or []
+            if top_with or top_without:
+                lines.append("## 策略候選清單")
+                lines.append("")
+                if top_with:
+                    lines.append("### 有智慧錢包支持")
+                    lines.append("")
+                    for item in top_with[:5]:
+                        lines.append(
+                            f"- {item['token_symbol']} ({item['token_address']}) [chain: {item['chain']}] "
+                            f"score={item['composite_score']} market={item.get('market_score')} smart={item.get('smart_money_score')}"
+                        )
+                    lines.append("")
+                if top_without:
+                    lines.append("### 無智慧錢包紀錄")
+                    lines.append("")
+                    for item in top_without[:5]:
+                        lines.append(
+                            f"- {item['token_symbol']} ({item['token_address']}) [chain: {item['chain']}] "
+                            f"score={item['composite_score']} market={item.get('market_score')}"
+                        )
+                    lines.append("")
+
         markdown_content = "\n".join(lines)
         report_path.write_text(markdown_content, encoding="utf-8")
 
@@ -533,6 +570,21 @@ class CollectorPipeline:
         payload = {
             "generated_at": run_time.isoformat(),
             "data": overview,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def _write_trade_candidates(self, candidates: dict | None, run_time: datetime) -> Path | None:
+        if not candidates:
+            return None
+        report_dir = Path("reports")
+        report_dir.mkdir(exist_ok=True)
+        path = report_dir / "trade_candidates_latest.json"
+        payload = {
+            "generated_at": run_time.isoformat(),
+            "with_smart_money": candidates.get("with_smart_money", []),
+            "without_smart_money": candidates.get("without_smart_money", []),
+            "all": candidates.get("all", []),
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path

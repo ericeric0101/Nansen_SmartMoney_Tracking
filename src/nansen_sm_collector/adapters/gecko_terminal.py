@@ -105,7 +105,12 @@ class GeckoTerminalClient:
             raise AdapterError(f"GeckoTerminal OHLCV 取得失敗: {error}") from error
         payload = response.json()
         data = payload.get("data")
-        if isinstance(data, list):
+        if isinstance(data, dict):
+            attributes = data.get("attributes") or {}
+            rows = attributes.get("ohlcv_list")
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, (list, tuple))]
+        elif isinstance(data, list):
             return [row for row in data if isinstance(row, dict)]
         return []
 

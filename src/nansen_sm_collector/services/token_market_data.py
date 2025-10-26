@@ -70,12 +70,28 @@ class TokenMarketDataService:
 
     def _fetch_pool_ohlcv(self, chain: str, pool_address: str) -> List[dict]:
         try:
-            return self._client.get_pool_ohlcv(
+            raw_rows = self._client.get_pool_ohlcv(
                 chain,
                 pool_address,
                 timeframe=self._timeframe,
                 limit=self._limit,
             )
+            ohlcv_rows: List[dict] = []
+            for row in raw_rows:
+                if isinstance(row, dict):
+                    ohlcv_rows.append(row)
+                elif isinstance(row, (list, tuple)) and len(row) >= 6:
+                    ohlcv_rows.append(
+                        {
+                            "timestamp": row[0],
+                            "open": row[1],
+                            "high": row[2],
+                            "low": row[3],
+                            "close": row[4],
+                            "volume": row[5],
+                        }
+                    )
+            return ohlcv_rows
         except AdapterError as error:
             logger.warning("gecko_ohlcv_failed", extra={"chain": chain, "pool": pool_address, "error": str(error)})
         return []
