@@ -2,7 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -167,6 +179,10 @@ class RunHistoryModel(Base):
         back_populates="run",
         cascade="all, delete-orphan",
     )
+    trade_candidates: Mapped[list["TradeCandidateModel"]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
 
 
 class TokenScreenerSnapshotModel(Base):
@@ -225,6 +241,29 @@ class TokenMarketMetricModel(Base):
     __table_args__ = (
         UniqueConstraint("chain", "token_address", name="uq_token_market_metrics_token"),
     )
+
+
+class TradeCandidateModel(Base):
+    """記錄策略候選清單與評分。"""
+
+    __tablename__ = "trade_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("run_history.id"), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_address: Mapped[str | None] = mapped_column(String(128))
+    chain: Mapped[str] = mapped_column(String(32), nullable=False)
+    composite_score: Mapped[float | None] = mapped_column(Float)
+    market_score: Mapped[float | None] = mapped_column(Float)
+    liquidity_score: Mapped[float | None] = mapped_column(Float)
+    smart_money_score: Mapped[float | None] = mapped_column(Float)
+    has_smart_money: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    market: Mapped[dict | None] = mapped_column(JSON)
+    smart_money: Mapped[dict | None] = mapped_column(JSON)
+
+    run: Mapped["RunHistoryModel"] = relationship(back_populates="trade_candidates")
 
 
 class SignalSummaryModel(Base):

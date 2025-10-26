@@ -417,3 +417,30 @@ class TokenScreenerRepository(BaseRepository):
             model.token_age_days = entry.get("token_age_days")
             model.updated_at = utc_now()
             self.session.add(model)
+
+
+class TradeCandidateRepository(BaseRepository):
+    """儲存每次策略候選清單資料。"""
+
+    def bulk_insert(self, run_id: int, entries: Sequence[dict]) -> None:
+        if not entries:
+            return
+        models: List[schemas.TradeCandidateModel] = []
+        for entry in entries:
+            model = schemas.TradeCandidateModel(
+                run_id=run_id,
+                scope=entry.get("scope", "all"),
+                rank=entry.get("rank", 0),
+                token_symbol=entry.get("token_symbol", ""),
+                token_address=entry.get("token_address"),
+                chain=entry.get("chain", ""),
+                composite_score=entry.get("composite_score"),
+                market_score=entry.get("market_score"),
+                liquidity_score=entry.get("liquidity_score"),
+                smart_money_score=entry.get("smart_money_score"),
+                has_smart_money=bool(entry.get("has_smart_money")),
+                market=entry.get("market"),
+                smart_money=entry.get("smart_money"),
+            )
+            models.append(model)
+        self.session.bulk_save_objects(models)

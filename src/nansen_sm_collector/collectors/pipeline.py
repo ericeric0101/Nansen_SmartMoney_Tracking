@@ -24,6 +24,7 @@ from ..data.repos import (
     SimulatedTradeRepository,
     TokenRepository,
     TokenScreenerRepository,
+    TradeCandidateRepository,
     WalletRepository,
 )
 from ..services.token_market_data import TokenMarketDataService
@@ -90,6 +91,7 @@ class CollectorPipeline:
             run_repo = RunHistoryRepository(session)
             filters = EventFilterSet(self._settings, event_repo)
             screener_repo = TokenScreenerRepository(session)
+            trade_candidate_repo = TradeCandidateRepository(session)
             trade_simulator: TradeSimulator | None = None
             if gecko_client and self._settings.trade_simulation_enabled:
                 trade_repo = SimulatedTradeRepository(session)
@@ -142,6 +144,8 @@ class CollectorPipeline:
             trade_candidates = trade_signal_builder.build(token_overview)
             stats["trade_candidates_with_smart"] = len(trade_candidates.get("with_smart_money", []))
             stats["trade_candidates_without_smart"] = len(trade_candidates.get("without_smart_money", []))
+            flat_candidates = self._flatten_trade_candidates(trade_candidates)
+            stats["trade_candidates_total"] = len(flat_candidates)
             filtered_events, filter_stats = filters.apply(merged_events)
             stats["filter_stats"] = filter_stats
             signals: List[Signal] = []
@@ -195,6 +199,7 @@ class CollectorPipeline:
             stats["token_overview_path"] = str(overview_path) if overview_path else None
             trade_candidates_path = self._write_trade_candidates(trade_candidates, run_time)
             stats["trade_candidates_path"] = str(trade_candidates_path) if trade_candidates_path else None
+            trade_candidate_repo.bulk_insert(run_model.id, flat_candidates)
 
         if isinstance(client, NansenAPIClient):
             client.close()
@@ -598,3 +603,21 @@ class CollectorPipeline:
         data = [event.model_dump(mode="json") for event in events]
         target_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return target_path
+
+    @staticmethod
+    def _flatten_trade_candidates(trade_candidates: dict | None) -> List[dict]:
+        if not isinstance(trade_candidates, dict):
+            return []
+        entries: List[dict] = []
+        for scope in ("with_smart_money", "without_smart_money", "all"):
+            items = trade_candidates.get(scope)
+            if not isinstance(items, Sequence):
+                continue
+            for index, item in enumerate(items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                record = dict(item)
+                record["scope"] = scope
+                record["rank"] = index
+                entries.append(record)
+        return entries
