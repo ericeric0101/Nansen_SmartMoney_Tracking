@@ -62,8 +62,10 @@ class ZeaburAPIClient:
             'then echo "running"; else echo "idle"; fi'
         )
         result = await self._execute_bash(command)
+        output_text = result.get("output", "")
+        lines = [line.strip() for line in output_text.replace("\r\n", "\n").split("\n") if line.strip()]
         return {
-            "status": result.get("output", "").strip() or "unknown",
+            "status": lines[-1] if lines else "unknown",
             "exit_code": result.get("exit_code"),
             "raw": result,
         }

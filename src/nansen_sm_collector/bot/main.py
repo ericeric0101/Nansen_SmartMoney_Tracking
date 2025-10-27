@@ -311,8 +311,22 @@ async def _local_schedule_loop(
 def _format_simple_response(title: str, payload: Dict[str, Any]) -> str:
     if not payload:
         return title
-    pretty = json.dumps(payload, ensure_ascii=False, indent=2)
+    pretty = json.dumps(_sanitize_payload(payload), ensure_ascii=False, indent=2)
     return f"{title}\n{pretty}"
+
+
+def _sanitize_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _sanitize_payload(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, str):
+        normalized = value.replace("\r\n", "\n").strip()
+        max_len = 600
+        if len(normalized) > max_len:
+            return f"{normalized[:max_len]}…"
+        return normalized
+    return value
 
 
 def _format_status_response(payload: Dict[str, Any]) -> str:
