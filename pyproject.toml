@@ -15,6 +15,7 @@ authors = [
 dependencies = [
   "alembic>=1.13",
   "httpx>=0.25",
+  "python-telegram-bot>=20.7",
   "pydantic>=2.5",
   "pydantic-settings>=2.1",
   "python-dotenv>=1.0",

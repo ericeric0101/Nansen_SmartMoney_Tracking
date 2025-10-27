@@ -56,6 +56,17 @@
 - 執行 `python -m nansen_sm_collector run-once --no-use-mock` 會在報表 `reports/phase1_latest.md` 生成後，自動把該 Markdown 檔傳到 Telegram；失敗時會記錄 warning。
 - 記得把 Bot token / chat id 換成實際值。若想同時傳其他檔案（像 `trade_candidates_latest.json`），可在 notifier 那段再延伸 `send_document` 呼叫。
 
+## Telegram 控制面板 Bot
+- 新增了 `python-telegram-bot` 介面，可透過 inline keyboard 控制 Zeabur 排程與立即執行 collector。
+- 需要在 `.env`（或 Zeabur Environment）設定：
+  - `TELEGRAM_BOT_TOKEN`
+  - `TELEGRAM_DASHBOARD_ALLOWED_CHAT_IDS`（可留空，或以逗號分隔允許使用者）
+  - `ZEABUR_API_TOKEN`
+  - `ZEABUR_PROJECT_ID`、`ZEABUR_SERVICE_ID`、`ZEABUR_HOURLY_JOB_ID`
+  - 若 Zeabur API 路徑與預設不同，可透過 `ZEABUR_RUN_JOB_ENDPOINT`、`ZEABUR_ENABLE_JOB_ENDPOINT`、`ZEABUR_DISABLE_JOB_ENDPOINT`、`ZEABUR_JOB_STATUS_ENDPOINT` 覆寫。
+- 啟動方式：`python -m nansen_sm_collector.bot`（已提供腳本 `scripts/start_dashboard_bot.sh`）。
+- 控制面板提供「立即執行 / 啟用排程（1~24 小時）/ 停止排程 / 查看狀態」等按鈕，內部會呼叫 Zeabur API 包裝器（`ZeaburAPIClient`）。
+
 ## 0x Swap 交易腳本
 - 腳本路徑：`scripts/zeroex_trade.py`，目前僅支援 `USDC`、`WETH`（大部分鏈）與 `WBNB`（BSC）作為 base token。
 - 先於 `.env` 設定 `ZEROEX_API_KEY`、`ZEROEX_PRIVATE_KEY`、`ZEROEX_TAKER_ADDRESS`（或 `ZEROEX_WALLET_ADDRESS`）；RPC 可以用 `ZEROEX_RPC_URL` 作為預設值，或針對鏈別額外設定 `ZEROEX_RPC_URL_<CHAIN_ID>`（例如 `ZEROEX_RPC_URL_8453`）或 `ZEROEX_RPC_URL_<CHAIN_ALIAS>`（例如 `ZEROEX_RPC_URL_BASE`、`ZEROEX_RPC_URL_BSC`）。
