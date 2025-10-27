@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from typing import Any, Dict, Iterable
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -19,6 +20,13 @@ from ..config.settings import AppSettings, get_settings
 from ..services.local_pipeline_runner import LocalPipelineRunner
 from ..services.zeabur_client import ZeaburAPIClient, ZeaburAPIError
 
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +48,9 @@ def run_bot() -> None:
     settings = get_settings()
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
+
+    logger.info("Starting Telegram dashboard bot")
+    logger.info("Zeabur integration enabled: %s", bool(settings.zeabur_api_token and settings.zeabur_project_id))
 
     application = (
         ApplicationBuilder()
@@ -80,8 +91,17 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("help", _help_command))
     application.add_handler(CallbackQueryHandler(_handle_callback))
 
-    logger.info("Starting Telegram dashboard bot")
-    application.run_polling()
+    try:
+        logger.info("Bot handlers registered; entering polling loop")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("bot_run_failed", exc_info=exc)
+        raise
 
 
 async def _dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -199,6 +219,7 @@ async def _post_init(application: Application) -> None:
     ]
     try:
         await application.bot.set_my_commands(commands)
+        logger.info("bot_commands_set")
     except Exception as exc:  # noqa: BLE001
         logger.warning("set_bot_commands_failed", extra={"error": str(exc)})
 
