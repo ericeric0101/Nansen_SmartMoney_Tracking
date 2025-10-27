@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -15,6 +16,7 @@ def main() -> None:
     settings = get_settings()
     pipeline = CollectorPipeline(settings=settings)
 
+    interval_seconds = _load_interval_seconds()
     while True:
         start = time.time()
         try:
@@ -26,8 +28,20 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             LOG_PATH.write_text(f"Last run failed: {exc}\n", encoding="utf-8")
         elapsed = time.time() - start
-        sleep_seconds = max(1800 - elapsed, 0)
+        sleep_seconds = max(interval_seconds - elapsed, 0)
         time.sleep(sleep_seconds)
+
+
+def _load_interval_seconds() -> int:
+    value = os.getenv("RUN_LOOP_INTERVAL_SECONDS")
+    try:
+        if value:
+            seconds = int(value)
+            if seconds > 0:
+                return seconds
+    except ValueError:
+        pass
+    return 3600
 
 
 if __name__ == "__main__":

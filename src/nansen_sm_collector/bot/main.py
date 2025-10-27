@@ -7,7 +7,6 @@ import sys
 from typing import Any, Dict, Iterable
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -49,8 +48,13 @@ def run_bot() -> None:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
 
+    zeabur_ready = bool(
+        settings.zeabur_api_token
+        and settings.zeabur_service_id
+        and settings.zeabur_environment_id
+    )
     logger.info("Starting Telegram dashboard bot")
-    logger.info("Zeabur integration enabled: %s", bool(settings.zeabur_api_token and settings.zeabur_project_id))
+    logger.info("Zeabur integration enabled: %s", zeabur_ready)
 
     application = (
         ApplicationBuilder()
@@ -60,18 +64,14 @@ def run_bot() -> None:
     )
 
     zeabur_client: ZeaburAPIClient | None = None
-    if settings.zeabur_api_token and settings.zeabur_project_id:
+    if zeabur_ready:
         zeabur_client = ZeaburAPIClient(
             base_url=str(settings.zeabur_api_base),
             api_token=settings.zeabur_api_token,
             project_id=settings.zeabur_project_id,
             service_id=settings.zeabur_service_id,
-            hourly_job_id=settings.zeabur_hourly_job_id,
+            environment_id=settings.zeabur_environment_id,
             pipeline_command=settings.zeabur_pipeline_command,
-            run_job_endpoint=settings.zeabur_run_job_endpoint,
-            enable_job_endpoint=settings.zeabur_enable_job_endpoint,
-            disable_job_endpoint=settings.zeabur_disable_job_endpoint,
-            job_status_endpoint=settings.zeabur_job_status_endpoint,
         )
 
     local_runner: LocalPipelineRunner | None = None
@@ -148,21 +148,20 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             if data == "run_once":
                 response = await zeabur_client.trigger_pipeline_once()
-                message = _format_simple_response("排程已提交", response)
+                message = _format_simple_response("已提交單次執行", response)
             elif data == "schedule_menu":
-                keyboard = _build_schedule_keyboard()
-                await query.edit_message_text("選擇排程時長：", reply_markup=keyboard)
-                return
+                response = await zeabur_client.start_scheduler(interval_hours=1)
+                message = _format_simple_response("已啟用每小時排程", response)
             elif data.startswith("schedule_duration_"):
                 hours = int(data.rsplit("_", 1)[-1])
-                response = await zeabur_client.enable_hourly_scheduler(hours)
+                response = await zeabur_client.start_scheduler(interval_hours=hours)
                 message = _format_simple_response(f"已啟用 {hours} 小時排程", response)
             elif data == "schedule_stop":
-                response = await zeabur_client.disable_hourly_scheduler()
-                message = _format_simple_response("已停用排程", response)
+                response = await zeabur_client.stop_scheduler()
+                message = _format_simple_response("已停止排程", response)
             elif data == "status":
                 response = await zeabur_client.fetch_scheduler_status()
-                message = _format_status_response(response)
+                message = _format_simple_response("遠端排程狀態", response)
             else:
                 message = "未支援的操作"
         except ZeaburAPIError as exc:
@@ -230,18 +229,6 @@ def _build_primary_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⏱️ 啟用排程", callback_data="schedule_menu")],
         [InlineKeyboardButton("⛔ 停止排程", callback_data="schedule_stop")],
         [InlineKeyboardButton("📊 查看狀態", callback_data="status")],
-    ]
-    return InlineKeyboardMarkup(buttons)
-
-
-def _build_schedule_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton("1 小時", callback_data="schedule_duration_1")],
-        [InlineKeyboardButton("3 小時", callback_data="schedule_duration_3")],
-        [InlineKeyboardButton("6 小時", callback_data="schedule_duration_6")],
-        [InlineKeyboardButton("12 小時", callback_data="schedule_duration_12")],
-        [InlineKeyboardButton("24 小時", callback_data="schedule_duration_24")],
-        [InlineKeyboardButton("返回", callback_data="status")],
     ]
     return InlineKeyboardMarkup(buttons)
 

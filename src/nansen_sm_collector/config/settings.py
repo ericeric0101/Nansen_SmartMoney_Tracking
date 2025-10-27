@@ -58,19 +58,15 @@ class AppSettings(BaseSettings):
     telegram_chat_id: Optional[str] = Field(None, alias="TELEGRAM_CHAT_ID")
     telegram_dashboard_allowed_chat_ids: str = Field("", alias="TELEGRAM_DASHBOARD_ALLOWED_CHAT_IDS")
 
-    zeabur_api_base: HttpUrl = Field("https://api.zeabur.com/v1", alias="ZEABUR_API_BASE")
+    zeabur_api_base: HttpUrl = Field("https://api.zeabur.com/graphql", alias="ZEABUR_API_BASE")
     zeabur_api_token: Optional[str] = Field(None, alias="ZEABUR_API_TOKEN")
     zeabur_project_id: Optional[str] = Field(None, alias="ZEABUR_PROJECT_ID")
     zeabur_service_id: Optional[str] = Field(None, alias="ZEABUR_SERVICE_ID")
-    zeabur_hourly_job_id: Optional[str] = Field(None, alias="ZEABUR_HOURLY_JOB_ID")
+    zeabur_environment_id: Optional[str] = Field(None, alias="ZEABUR_ENVIRONMENT_ID")
     zeabur_pipeline_command: str = Field(
         "python -m nansen_sm_collector run-once --no-use-mock",
         alias="ZEABUR_PIPELINE_COMMAND",
     )
-    zeabur_run_job_endpoint: Optional[str] = Field(None, alias="ZEABUR_RUN_JOB_ENDPOINT")
-    zeabur_enable_job_endpoint: Optional[str] = Field(None, alias="ZEABUR_ENABLE_JOB_ENDPOINT")
-    zeabur_disable_job_endpoint: Optional[str] = Field(None, alias="ZEABUR_DISABLE_JOB_ENDPOINT")
-    zeabur_job_status_endpoint: Optional[str] = Field(None, alias="ZEABUR_JOB_STATUS_ENDPOINT")
 
     weight_usd: float = Field(0.25, alias="W_USD")
     weight_label: float = Field(0.25, alias="W_LABEL")

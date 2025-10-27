@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import httpx
 
@@ -12,7 +11,13 @@ class ZeaburAPIError(RuntimeError):
 
 
 class ZeaburAPIClient:
-    """Lightweight Zeabur API helper used by the Telegram dashboard."""
+    """GraphQL-based Zeabur helper for the Telegram dashboard."""
+
+    _EXECUTE_COMMAND_MUTATION = (
+        "mutation ExecuteCommand($serviceId: ObjectID!, $environmentId: ObjectID!, $command: [String!]!)"
+        " { executeCommand(serviceID: $serviceId, environmentID: $environmentId, command: $command) "
+        "{ exitCode output } }"
+    )
 
     def __init__(
         self,
@@ -21,111 +26,90 @@ class ZeaburAPIClient:
         api_token: str,
         project_id: Optional[str] = None,
         service_id: Optional[str] = None,
-        hourly_job_id: Optional[str] = None,
+        environment_id: Optional[str] = None,
         pipeline_command: str,
-        run_job_endpoint: Optional[str] = None,
-        enable_job_endpoint: Optional[str] = None,
-        disable_job_endpoint: Optional[str] = None,
-        job_status_endpoint: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: float = 20.0,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
+        self._graphql_url = base_url
         self._token = api_token
         self._project_id = project_id
         self._service_id = service_id
-        self._hourly_job_id = hourly_job_id
+        self._environment_id = environment_id
         self._pipeline_command = pipeline_command
-        self._run_job_endpoint = run_job_endpoint
-        self._enable_job_endpoint = enable_job_endpoint
-        self._disable_job_endpoint = disable_job_endpoint
-        self._job_status_endpoint = job_status_endpoint
         self._timeout = timeout
 
     async def trigger_pipeline_once(self, command: Optional[str] = None) -> dict[str, Any]:
-        endpoint = self._run_job_endpoint or self._default_run_job_endpoint()
-        payload: dict[str, Any] = {"command": command or self._pipeline_command}
-        if self._service_id:
-            payload.setdefault("serviceId", self._service_id)
-        return await self._request("POST", endpoint, json=payload)
+        cmd = command or self._pipeline_command
+        return await self._execute_bash(cmd)
 
-    async def enable_hourly_scheduler(self, duration_hours: int, command: Optional[str] = None) -> dict[str, Any]:
-        endpoint = self._enable_job_endpoint or self._default_enable_job_endpoint()
-        if duration_hours <= 0:
-            raise ZeaburAPIError("duration_hours must be positive")
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
-        payload: dict[str, Any] = {
-            "command": command or self._pipeline_command,
-            "schedule": {
-                "type": "cron",
-                "expression": "0 * * * *",
-                "enabled": True,
-                "expiresAt": expires_at.isoformat().replace("+00:00", "Z"),
-            },
-        }
-        if self._service_id:
-            payload.setdefault("serviceId", self._service_id)
-        return await self._request("PUT", endpoint, json=payload)
+    async def start_scheduler(self, interval_hours: int) -> dict[str, Any]:
+        if interval_hours <= 0:
+            raise ZeaburAPIError("interval_hours must be positive")
+        seconds = interval_hours * 3600
+        command = (
+            "RUN_LOOP_INTERVAL_SECONDS="
+            f"{seconds} nohup python scripts/run_loop.py > /tmp/nansen_run_loop.log 2>&1 & echo RUN_LOOP_STARTED"
+        )
+        return await self._execute_bash(command)
 
-    async def disable_hourly_scheduler(self) -> dict[str, Any]:
-        endpoint = self._disable_job_endpoint or self._default_disable_job_endpoint()
-        payload = {"schedule": {"enabled": False}}
-        return await self._request("PUT", endpoint, json=payload)
+    async def stop_scheduler(self) -> dict[str, Any]:
+        command = 'pkill -f "python scripts/run_loop.py" || true'
+        return await self._execute_bash(command)
 
     async def fetch_scheduler_status(self) -> dict[str, Any]:
-        endpoint = self._job_status_endpoint or self._default_job_status_endpoint()
-        return await self._request("GET", endpoint)
+        command = (
+            'if pgrep -f "python scripts/run_loop.py" >/dev/null; '
+            'then echo "running"; else echo "idle"; fi'
+        )
+        result = await self._execute_bash(command)
+        return {
+            "status": result.get("output", "").strip() or "unknown",
+            "exit_code": result.get("exit_code"),
+            "raw": result,
+        }
 
-    def _default_run_job_endpoint(self) -> str:
-        if not self._project_id:
-            raise ZeaburAPIError("project_id is required to trigger jobs")
-        return f"/projects/{self._project_id}/jobs"
+    async def execute_command(self, command: Sequence[str]) -> dict[str, Any]:
+        if not self._service_id or not self._environment_id:
+            raise ZeaburAPIError("service_id and environment_id must be configured")
+        payload = {
+            "query": self._EXECUTE_COMMAND_MUTATION,
+            "variables": {
+                "serviceId": self._service_id,
+                "environmentId": self._environment_id,
+                "command": list(command),
+            },
+        }
+        data = await self._graphql_request(payload)
+        result = (data.get("executeCommand") if isinstance(data, dict) else None) or {}
+        return {
+            "exit_code": result.get("exitCode"),
+            "output": result.get("output", ""),
+        }
 
-    def _default_enable_job_endpoint(self) -> str:
-        if not (self._project_id and self._hourly_job_id):
-            raise ZeaburAPIError("project_id and hourly_job_id are required to enable scheduler")
-        return f"/projects/{self._project_id}/jobs/{self._hourly_job_id}"
+    async def _execute_bash(self, command: str) -> dict[str, Any]:
+        wrapped = ["bash", "-lc", command]
+        result = await self.execute_command(wrapped)
+        return result
 
-    def _default_disable_job_endpoint(self) -> str:
-        if not (self._project_id and self._hourly_job_id):
-            raise ZeaburAPIError("project_id and hourly_job_id are required to disable scheduler")
-        return f"/projects/{self._project_id}/jobs/{self._hourly_job_id}"
-
-    def _default_job_status_endpoint(self) -> str:
-        if not (self._project_id and self._hourly_job_id):
-            raise ZeaburAPIError("project_id and hourly_job_id are required to fetch scheduler status")
-        return f"/projects/{self._project_id}/jobs/{self._hourly_job_id}"
-
-    async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        *,
-        json: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
+    async def _graphql_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self._token:
             raise ZeaburAPIError("ZEABUR_API_TOKEN is not configured")
-        url = self._compose_url(endpoint)
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.request(method.upper(), url, headers=headers, json=json)
+            response = await client.post(self._graphql_url, headers=headers, json=payload)
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ZeaburAPIError(
                 f"Zeabur API request failed: {exc.response.status_code} {exc.response.text}"
             ) from exc
-        if not response.content:
-            return {}
         try:
-            return response.json()
+            data = response.json()
         except json.JSONDecodeError as exc:
             raise ZeaburAPIError("Zeabur API returned non-JSON response") from exc
-
-    def _compose_url(self, endpoint: str) -> str:
-        if endpoint.startswith("http://") or endpoint.startswith("https://"):
-            return endpoint
-        path = endpoint if endpoint.startswith("/") else f"/{endpoint}"
-        return f"{self._base_url}{path}"
+        if errors := data.get("errors"):
+            raise ZeaburAPIError(str(errors))
+        return data.get("data") or {}
