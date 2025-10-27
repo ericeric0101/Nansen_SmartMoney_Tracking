@@ -4,9 +4,10 @@ import json
 import logging
 from typing import Any, Dict, Iterable
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -40,7 +41,12 @@ def run_bot() -> None:
     if not settings.zeabur_api_token:
         raise RuntimeError("ZEABUR_API_TOKEN is not configured")
 
-    application = ApplicationBuilder().token(settings.telegram_bot_token).build()
+    application = (
+        ApplicationBuilder()
+        .token(settings.telegram_bot_token)
+        .post_init(_post_init)
+        .build()
+    )
 
     zeabur_client = ZeaburAPIClient(
         base_url=str(settings.zeabur_api_base),
@@ -133,6 +139,17 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     keyboard = _build_primary_keyboard()
     await query.edit_message_text(message, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+
+
+async def _post_init(application: Application) -> None:
+    commands = [
+        BotCommand("dashboard", "顯示控制面板"),
+        BotCommand("help", "顯示說明"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("set_bot_commands_failed", extra={"error": str(exc)})
 
 
 def _build_primary_keyboard() -> InlineKeyboardMarkup:
