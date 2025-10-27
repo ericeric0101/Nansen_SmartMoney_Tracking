@@ -209,7 +209,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         message = "尚未設定 Zeabur 或本地執行環境。"
 
     keyboard = _build_primary_keyboard()
-    await query.edit_message_text(message, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+    await query.edit_message_text(message, reply_markup=keyboard)
 
 
 async def _post_init(application: Application) -> None:
@@ -325,18 +325,18 @@ def _format_simple_response(title: str, payload: Dict[str, Any]) -> str:
     if not payload:
         return title
     pretty = json.dumps(payload, ensure_ascii=False, indent=2)
-    return f"*{title}*\n```\n{pretty}\n```"
+    return f"{title}\n{pretty}"
 
 
 def _format_status_response(payload: Dict[str, Any]) -> str:
     if not payload:
         return "尚無排程資訊"
-    status_lines = ["*排程狀態*"]
+    status_lines = ["排程狀態"]
     schedule: Dict[str, Any] = payload.get("schedule") or {}
     enabled = schedule.get("enabled")
     status_lines.append(f"狀態：{'啟用' if enabled else '停用'}")
     if "expression" in schedule:
-        status_lines.append(f"Cron：`{schedule['expression']}`")
+        status_lines.append(f"Cron：{schedule['expression']}")
     if expires_at := schedule.get("expiresAt"):
         status_lines.append(f"到期時間：{expires_at}")
     if last_run := payload.get("lastRunAt"):
