@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+import json
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,13 @@ class TelegramNotifier:
         self._timeout = timeout
         self._api_base = f"https://api.telegram.org/bot{self._bot_token}"
 
-    def send_text(self, text: str, *, parse_mode: Optional[str] = None) -> bool:
+    def send_text(
+        self,
+        text: str,
+        *,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[dict] = None,
+    ) -> bool:
         message = text.strip()
         if not message:
             return False
@@ -37,6 +44,8 @@ class TelegramNotifier:
         data: dict[str, str] = {"chat_id": self._chat_id, "text": message}
         if parse_mode:
             data["parse_mode"] = parse_mode
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
 
         try:
             response = httpx.post(url, data=data, timeout=self._timeout)

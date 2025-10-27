@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -653,6 +654,8 @@ class CollectorPipeline:
         except OSError:
             return "\n".join(lines)
 
+        address_pattern = re.compile(r"0x[a-fA-F0-9]{6,}")
+
         def _format_float(value: str) -> str:
             try:
                 number = float(value)
@@ -661,16 +664,57 @@ class CollectorPipeline:
             return f"{number:.2f}"
 
         def _shorten_line(line: str) -> str:
-            parts = line.split()
-            formatted_parts: List[str] = []
-            for part in parts:
-                if "=" in part:
-                    key, _, raw_value = part.partition("=")
-                    formatted_value = _format_float(raw_value)
-                    formatted_parts.append(f"{key}={formatted_value}")
+            lines_out: List[str] = []
+            address_line = address_pattern.search(line)
+
+            prefix = line
+            address_text: Optional[str] = None
+            suffix = ""
+            chain_value: Optional[str] = None
+
+            if address_line:
+                start, end = address_line.span()
+                address_text = address_line.group(0)
+                prefix = line[:start].strip()
+                suffix = line[end:].strip()
+                chain_match = re.search(r"\[chain:\s*([^\]]+)\]", suffix, re.IGNORECASE)
+                if chain_match:
+                    chain_value = chain_match.group(1).strip()
+                    suffix = re.sub(r"\[chain:[^\]]+\]", "", suffix).strip()
+
+            def _format_segment(segment: str) -> str:
+                parts = segment.split()
+                formatted_parts: List[str] = []
+                for part in parts:
+                    if "=" in part:
+                        key, _, raw_value = part.partition("=")
+                        formatted_value = _format_float(raw_value)
+                        formatted_parts.append(f"{key}={formatted_value}")
+                    else:
+                        formatted_parts.append(part)
+                return " ".join(formatted_parts).strip()
+
+            if prefix:
+                formatted_prefix = _format_segment(prefix)
+                if formatted_prefix.endswith("("):
+                    formatted_prefix = formatted_prefix[:-1].rstrip()
+                lines_out.append(formatted_prefix)
+
+            if address_text:
+                if chain_value:
+                    link = f"https://dexscreener.com/{chain_value.lower()}/{address_text.lower()}"
+                    lines_out.append(link)
                 else:
-                    formatted_parts.append(part)
-            return " ".join(formatted_parts)
+                    lines_out.append(address_text)
+
+            if suffix:
+                suffix_formatted = _format_segment(suffix)
+                if suffix_formatted:
+                    lines_out.append(suffix_formatted)
+
+            if not lines_out:
+                return line.strip()
+            return "\n".join(filter(None, lines_out))
 
         for line in content:
             stripped = line.strip()
@@ -678,7 +722,8 @@ class CollectorPipeline:
                 continue
             if stripped.startswith("產出時間") or stripped.startswith("當地時間"):
                 continue
-            lines.append(_shorten_line(stripped))
+            shortened = _shorten_line(stripped)
+            lines.append(shortened)
 
         message = "\n".join(lines).strip()
         return message
