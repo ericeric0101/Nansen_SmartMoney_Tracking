@@ -52,6 +52,10 @@
    > 若要改用實際 Nansen API 資料，可加上 `--no-use-mock`（需確保 API 權限足夠）。
    - EventFilterSet 現在支援動態成交額門檻，想改用動態成交額門檻，可設定 `MIN_USD_NOTIONAL_DYNAMIC=true`，並調整 `MIN_USD_NOTIONAL_QUANTILE`、`MIN_USD_NOTIONAL_LOOKBACK_MINUTES` 等參數；未滿足樣本數時會落回 `MIN_USD_NOTIONAL_FALLBACK`。評分器同時識別 DEX 大額買入/賣出與 Netflow 正負值，產出買賣訊號並在報告中顯示相關地址與錢包；若開啟模擬交易，系統也會記錄每次買入、計算目標價並於達標時寫入賣出紀錄與時間。評分器同時識別 DEX 大額買入/賣出與 Netflow 正負值，產出買賣訊號並在報告中顯示相關地址與錢包。
 
+## Telegram通知腳本
+- 執行 `python -m nansen_sm_collector run-once --no-use-mock` 會在報表 `reports/phase1_latest.md` 生成後，自動把該 Markdown 檔傳到 Telegram；失敗時會記錄 warning。
+- 記得把 Bot token / chat id 換成實際值。若想同時傳其他檔案（像 `trade_candidates_latest.json`），可在 notifier 那段再延伸 `send_document` 呼叫。
+
 ## 0x Swap 交易腳本
 - 腳本路徑：`scripts/zeroex_trade.py`，目前僅支援 `USDC`、`WETH`（大部分鏈）與 `WBNB`（BSC）作為 base token。
 - 先於 `.env` 設定 `ZEROEX_API_KEY`、`ZEROEX_PRIVATE_KEY`、`ZEROEX_TAKER_ADDRESS`（或 `ZEROEX_WALLET_ADDRESS`）；RPC 可以用 `ZEROEX_RPC_URL` 作為預設值，或針對鏈別額外設定 `ZEROEX_RPC_URL_<CHAIN_ID>`（例如 `ZEROEX_RPC_URL_8453`）或 `ZEROEX_RPC_URL_<CHAIN_ALIAS>`（例如 `ZEROEX_RPC_URL_BASE`、`ZEROEX_RPC_URL_BSC`）。

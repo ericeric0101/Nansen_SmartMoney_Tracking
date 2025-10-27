@@ -32,6 +32,7 @@ from ..services.token_overview import TokenOverviewService
 from ..services.trade_signal_builder import TradeSignalBuilder
 from ..services.trade_simulator import TradeSimulator
 from ..services.wallet_alpha import WalletAlphaService
+from ..services.telegram_notifier import TelegramNotifier
 from .enrich import EventEnricher
 from .filters import EventFilterSet
 from .normalize import EventNormalizer
@@ -59,6 +60,16 @@ class CollectorPipeline:
         db.upgrade_schema(self._engine)
         self._session_factory = db.create_session_factory(self._engine)
         self._logger = logging.getLogger(__name__)
+        self._telegram_notifier: TelegramNotifier | None = None
+        if (
+            self._settings.telegram_notify_enabled
+            and self._settings.telegram_bot_token
+            and self._settings.telegram_chat_id
+        ):
+            self._telegram_notifier = TelegramNotifier(
+                bot_token=self._settings.telegram_bot_token,
+                chat_id=self._settings.telegram_chat_id,
+            )
 
     def run_once(self, use_mock: bool = True) -> PipelineResult:
         """執行單次資料蒐集。"""
@@ -200,6 +211,17 @@ class CollectorPipeline:
             trade_candidates_path = self._write_trade_candidates(trade_candidates, run_time)
             stats["trade_candidates_path"] = str(trade_candidates_path) if trade_candidates_path else None
             trade_candidate_repo.bulk_insert(run_model.id, flat_candidates)
+
+        if self._telegram_notifier and report_path:
+            try:
+                message = self._build_telegram_message(run_time, report_path)
+                sent = self._telegram_notifier.send_text(message)
+                if not sent:
+                    caption = f"Phase-1 Summary {run_time.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                    self._telegram_notifier.send_document(report_path, caption=caption)
+            except Exception as error:  # noqa: BLE001
+                if self._logger.isEnabledFor(logging.WARNING):
+                    self._logger.warning("telegram_notify_failed", exc_info=error)
 
         if isinstance(client, NansenAPIClient):
             client.close()
@@ -621,3 +643,42 @@ class CollectorPipeline:
                 record["rank"] = index
                 entries.append(record)
         return entries
+
+    def _build_telegram_message(self, run_time: datetime, report_path: Path) -> str:
+        timestamp = run_time.strftime("%Y-%m-%d %H:%M:%S UTC")
+        lines = [f"Phase-1 Summary {timestamp}", ""]
+
+        try:
+            content = report_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return "\n".join(lines)
+
+        def _format_float(value: str) -> str:
+            try:
+                number = float(value)
+            except ValueError:
+                return value
+            return f"{number:.2f}"
+
+        def _shorten_line(line: str) -> str:
+            parts = line.split()
+            formatted_parts: List[str] = []
+            for part in parts:
+                if "=" in part:
+                    key, _, raw_value = part.partition("=")
+                    formatted_value = _format_float(raw_value)
+                    formatted_parts.append(f"{key}={formatted_value}")
+                else:
+                    formatted_parts.append(part)
+            return " ".join(formatted_parts)
+
+        for line in content:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("# Phase-1 Signals Summary"):
+                continue
+            if stripped.startswith("產出時間") or stripped.startswith("當地時間"):
+                continue
+            lines.append(_shorten_line(stripped))
+
+        message = "\n".join(lines).strip()
+        return message

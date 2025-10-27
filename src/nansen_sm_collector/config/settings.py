@@ -53,6 +53,9 @@ class AppSettings(BaseSettings):
     thresh_signal: float = Field(0.65, alias="THRESH_SIGNAL")
     cooldown_min: int = Field(30, alias="COOLDOWN_MIN")
     dump_phase1_raw_events: bool = Field(False, alias="DUMP_PHASE1_RAW_EVENTS")
+    telegram_notify_enabled: bool = Field(False, alias="TELEGRAM_NOTIFY_ENABLED")
+    telegram_bot_token: Optional[str] = Field(None, alias="TELEGRAM_BOT_TOKEN")
+    telegram_chat_id: Optional[str] = Field(None, alias="TELEGRAM_CHAT_ID")
 
     weight_usd: float = Field(0.25, alias="W_USD")
     weight_label: float = Field(0.25, alias="W_LABEL")
