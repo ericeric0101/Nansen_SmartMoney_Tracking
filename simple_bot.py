@@ -1,9 +1,16 @@
 import os
+import sys
 import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# 確保日誌實時輸出
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout,
+    force=True
+)
 logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -25,17 +32,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 def main() -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not set")
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
     
-    logger.info(f"Starting bot with token: {token[:20]}...")
+    logger.info("=" * 50)
+    logger.info("Starting Telegram Bot")
+    logger.info(f"Token: {token[:20]}...")
+    logger.info("=" * 50)
     
-    application = ApplicationBuilder().token(token).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    logger.info("Bot handlers registered, starting polling...")
-    application.run_polling()
+    try:
+        application = ApplicationBuilder().token(token).build()
+        logger.info("Application created")
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CallbackQueryHandler(button_callback))
+        logger.info("Handlers registered")
+        
+        logger.info("Starting polling...")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     main()
