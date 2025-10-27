@@ -66,6 +66,7 @@
   - 若 Zeabur API 路徑與預設不同，可透過 `ZEABUR_RUN_JOB_ENDPOINT`、`ZEABUR_ENABLE_JOB_ENDPOINT`、`ZEABUR_DISABLE_JOB_ENDPOINT`、`ZEABUR_JOB_STATUS_ENDPOINT` 覆寫。
 - 啟動方式：`python -m nansen_sm_collector.bot`（已提供腳本 `scripts/start_dashboard_bot.sh`）。
 - 控制面板提供「立即執行 / 啟用排程（1~24 小時）/ 停止排程 / 查看狀態」等按鈕，內部會呼叫 Zeabur API 包裝器（`ZeaburAPIClient`）。
+- 若未設定 Zeabur API，Bot 會改用本地指令執行，按下「啟用排程」即預設每小時跑一次 (`ZEABUR_PIPELINE_COMMAND` 可自訂)。
 
 ## 0x Swap 交易腳本
 - 腳本路徑：`scripts/zeroex_trade.py`，目前僅支援 `USDC`、`WETH`（大部分鏈）與 `WBNB`（BSC）作為 base token。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Iterable
@@ -15,6 +16,7 @@ from telegram.ext import (
 )
 
 from ..config.settings import AppSettings, get_settings
+from ..services.local_pipeline_runner import LocalPipelineRunner
 from ..services.zeabur_client import ZeaburAPIClient, ZeaburAPIError
 
 
@@ -38,8 +40,6 @@ def run_bot() -> None:
     settings = get_settings()
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
-    if not settings.zeabur_api_token:
-        raise RuntimeError("ZEABUR_API_TOKEN is not configured")
 
     application = (
         ApplicationBuilder()
@@ -48,22 +48,32 @@ def run_bot() -> None:
         .build()
     )
 
-    zeabur_client = ZeaburAPIClient(
-        base_url=str(settings.zeabur_api_base),
-        api_token=settings.zeabur_api_token,
-        project_id=settings.zeabur_project_id,
-        service_id=settings.zeabur_service_id,
-        hourly_job_id=settings.zeabur_hourly_job_id,
-        pipeline_command=settings.zeabur_pipeline_command,
-        run_job_endpoint=settings.zeabur_run_job_endpoint,
-        enable_job_endpoint=settings.zeabur_enable_job_endpoint,
-        disable_job_endpoint=settings.zeabur_disable_job_endpoint,
-        job_status_endpoint=settings.zeabur_job_status_endpoint,
-    )
+    zeabur_client: ZeaburAPIClient | None = None
+    if settings.zeabur_api_token and settings.zeabur_project_id:
+        zeabur_client = ZeaburAPIClient(
+            base_url=str(settings.zeabur_api_base),
+            api_token=settings.zeabur_api_token,
+            project_id=settings.zeabur_project_id,
+            service_id=settings.zeabur_service_id,
+            hourly_job_id=settings.zeabur_hourly_job_id,
+            pipeline_command=settings.zeabur_pipeline_command,
+            run_job_endpoint=settings.zeabur_run_job_endpoint,
+            enable_job_endpoint=settings.zeabur_enable_job_endpoint,
+            disable_job_endpoint=settings.zeabur_disable_job_endpoint,
+            job_status_endpoint=settings.zeabur_job_status_endpoint,
+        )
+
+    local_runner: LocalPipelineRunner | None = None
+    if not zeabur_client:
+        local_runner = LocalPipelineRunner(settings.zeabur_pipeline_command)
 
     authorized_ids = _build_authorized_chat_ids(settings)
     application.bot_data["settings"] = settings
     application.bot_data["zeabur_client"] = zeabur_client
+    application.bot_data["local_runner"] = local_runner
+    application.bot_data["local_schedule_task"] = None
+    application.bot_data["local_schedule_stop_event"] = None
+    application.bot_data["local_schedule_interval_hours"] = None
     application.bot_data["authorized_chat_ids"] = authorized_ids
 
     application.add_handler(CommandHandler(["start", "dashboard"], _dashboard_command))
@@ -110,32 +120,73 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text("未知的操作")
         return
 
-    zeabur_client: ZeaburAPIClient = context.bot_data["zeabur_client"]
+    zeabur_client: ZeaburAPIClient | None = context.bot_data.get("zeabur_client")
+    local_runner: LocalPipelineRunner | None = context.bot_data.get("local_runner")
     message = ""
 
-    try:
-        if data == "run_once":
-            response = await zeabur_client.trigger_pipeline_once()
-            message = _format_simple_response("排程已提交", response)
-        elif data == "schedule_menu":
-            keyboard = _build_schedule_keyboard()
-            await query.edit_message_text("選擇排程時長：", reply_markup=keyboard)
-            return
-        elif data.startswith("schedule_duration_"):
-            hours = int(data.rsplit("_", 1)[-1])
-            response = await zeabur_client.enable_hourly_scheduler(hours)
-            message = _format_simple_response(f"已啟用 {hours} 小時排程", response)
-        elif data == "schedule_stop":
-            response = await zeabur_client.disable_hourly_scheduler()
-            message = _format_simple_response("已停用排程", response)
-        elif data == "status":
-            response = await zeabur_client.fetch_scheduler_status()
-            message = _format_status_response(response)
-        else:
-            message = "未支援的操作"
-    except ZeaburAPIError as exc:
-        logger.warning("zeabur_api_error", extra={"error": str(exc)})
-        message = f"Zeabur API 發生錯誤：{exc}"
+    if zeabur_client:
+        try:
+            if data == "run_once":
+                response = await zeabur_client.trigger_pipeline_once()
+                message = _format_simple_response("排程已提交", response)
+            elif data == "schedule_menu":
+                keyboard = _build_schedule_keyboard()
+                await query.edit_message_text("選擇排程時長：", reply_markup=keyboard)
+                return
+            elif data.startswith("schedule_duration_"):
+                hours = int(data.rsplit("_", 1)[-1])
+                response = await zeabur_client.enable_hourly_scheduler(hours)
+                message = _format_simple_response(f"已啟用 {hours} 小時排程", response)
+            elif data == "schedule_stop":
+                response = await zeabur_client.disable_hourly_scheduler()
+                message = _format_simple_response("已停用排程", response)
+            elif data == "status":
+                response = await zeabur_client.fetch_scheduler_status()
+                message = _format_status_response(response)
+            else:
+                message = "未支援的操作"
+        except ZeaburAPIError as exc:
+            logger.warning("zeabur_api_error", extra={"error": str(exc)})
+            message = f"Zeabur API 發生錯誤：{exc}"
+    elif local_runner:
+        try:
+            if data == "run_once":
+                response = await local_runner.run_once()
+                message = _format_simple_response("本地執行已完成", response)
+            elif data == "schedule_menu":
+                response = await _start_local_schedule(context, interval_hours=1)
+                message = _format_simple_response("已啟用每小時排程", response)
+            elif data.startswith("schedule_duration_"):
+                hours = int(data.rsplit("_", 1)[-1])
+                response = await _start_local_schedule(context, interval_hours=hours)
+                message = _format_simple_response(f"已啟用 {hours} 小時排程", response)
+            elif data == "schedule_stop":
+                schedule_response = await _stop_local_schedule(context)
+                runner_response = await local_runner.terminate()
+                message = _format_simple_response(
+                    "已停用排程",
+                    {
+                        "schedule": schedule_response,
+                        "runner": runner_response,
+                    },
+                )
+            elif data == "status":
+                schedule_status = await _local_schedule_status(context)
+                runner_status = await local_runner.status()
+                message = _format_simple_response(
+                    "本地執行狀態",
+                    {
+                        "schedule": schedule_status,
+                        "runner": runner_status,
+                    },
+                )
+            else:
+                message = "未支援的操作"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local_runner_error", extra={"error": str(exc)})
+            message = f"本地模式發生錯誤：{exc}"
+    else:
+        message = "尚未設定 Zeabur 或本地執行環境。"
 
     keyboard = _build_primary_keyboard()
     await query.edit_message_text(message, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
@@ -172,6 +223,81 @@ def _build_schedule_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("返回", callback_data="status")],
     ]
     return InlineKeyboardMarkup(buttons)
+
+
+async def _start_local_schedule(context: ContextTypes.DEFAULT_TYPE, interval_hours: int) -> Dict[str, Any]:
+    interval_hours = max(1, interval_hours)
+    runner: LocalPipelineRunner | None = context.bot_data.get("local_runner")
+    if not runner:
+        return {"status": "unavailable"}
+    task = context.bot_data.get("local_schedule_task")
+    if task and not task.done():
+        return {
+            "status": "running",
+            "interval_hours": context.bot_data.get("local_schedule_interval_hours", interval_hours),
+        }
+    stop_event = asyncio.Event()
+    context.bot_data["local_schedule_stop_event"] = stop_event
+    context.bot_data["local_schedule_interval_hours"] = interval_hours
+    loop_task = asyncio.create_task(_local_schedule_loop(runner, stop_event, interval_hours))
+    context.bot_data["local_schedule_task"] = loop_task
+    return {
+        "status": "scheduled",
+        "interval_hours": interval_hours,
+    }
+
+
+async def _stop_local_schedule(context: ContextTypes.DEFAULT_TYPE) -> Dict[str, Any]:
+    task: asyncio.Task | None = context.bot_data.get("local_schedule_task")
+    stop_event: asyncio.Event | None = context.bot_data.get("local_schedule_stop_event")
+    if not task:
+        return {"status": "idle"}
+    if stop_event and not stop_event.is_set():
+        stop_event.set()
+    try:
+        await asyncio.wait_for(task, timeout=5.0)
+    except asyncio.TimeoutError:
+        task.cancel()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("local_schedule_stop_error", extra={"error": str(exc)})
+    finally:
+        context.bot_data["local_schedule_task"] = None
+        context.bot_data["local_schedule_stop_event"] = None
+    return {"status": "stopped"}
+
+
+async def _local_schedule_status(context: ContextTypes.DEFAULT_TYPE) -> Dict[str, Any]:
+    task: asyncio.Task | None = context.bot_data.get("local_schedule_task")
+    interval_hours = context.bot_data.get("local_schedule_interval_hours")
+    if task and not task.done():
+        return {
+            "status": "running",
+            "interval_hours": interval_hours,
+        }
+    return {
+        "status": "idle",
+        "interval_hours": interval_hours,
+    }
+
+
+async def _local_schedule_loop(
+    runner: LocalPipelineRunner,
+    stop_event: asyncio.Event,
+    interval_hours: int,
+) -> None:
+    interval_seconds = interval_hours * 3600
+    while not stop_event.is_set():
+        try:
+            await runner.run_once()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local_schedule_run_failed", extra={"error": str(exc)})
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except asyncio.TimeoutError:
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local_schedule_wait_failed", extra={"error": str(exc)})
+            break
 
 
 def _format_simple_response(title: str, payload: Dict[str, Any]) -> str:
